@@ -1,0 +1,417 @@
+---
+title: "SuperstoreV2"
+author: "Muhammad Amirul Daniel bin Badrul Hisham"
+date: "5/9/2022"
+output:
+  html_document:
+    df_print: paged
+  word_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Tableau Superstore Dataset
+
+![](img/pic1.jpg)
+
+With growing demands and cut-throat competitions in the market, a Superstore Giant is seeking your knowledge in understanding what works best for them. They would like to understand which products, regions, categories and customer segments they should target or avoid.
+
+They also want to have a Regression model to predict Sales or Profit.
+<br />
+<br />
+
+### 1) Load Library
+The libraries for the installed packages are loaded.
+```{r}
+library(readxl)
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(ggrepel)
+library(forcats)
+library(scales)
+library(superml)
+library(corrplot)
+library(reshape2)
+```
+<br />
+
+### 2) Import Data
+Firstly, let's get the dataset from XLS file. In the XLS file, there are 3 sheets:
+
+-   Orders: List of transactions
+-   Returns: List of items returned
+-   People: List of sales person for West, East, Central and South
+```{r}
+df_order = read_xls('superstorev2.xls', sheet = 'Orders', col_names = TRUE)
+df_return = read_xls('superstorev2.xls', sheet='Returns', col_names = TRUE)
+df_people = read_xls('superstorev2.xls', sheet='People', col_names = TRUE)
+```
+
+
+#### <span style="text-decoration:underline">  Viewing data</span>
+"Order" dataframe:
+```{r}
+head(df_order)
+```
+
+"Return" dataframe:
+```{r}
+head(df_return)
+```
+
+"People" dataframe:
+```{r}
+head(df_people)
+```
+<br />
+
+### 3) Data Pre-processing
+#### <span style="text-decoration:underline">  Merging "Return" and "People" dataframe into "Order" dataframe</span>
+We merge `df_return$Returned` and `df_people$Person` into `d_orderf$Returned` and `df_order$Person` respectively, using full join to retain all values and rows.
+
+```{r}
+df = dplyr::full_join(df_order, df_return, by="Order ID")
+
+df$`Order Date` = as.Date.character(df$`Order Date`, format="%Y-%m-%d")
+df$`Ship Date` = as.Date(df$`Ship Date`, format="%Y-%m-%d")
+df
+```
+After all the dataset are merged, `df` will be the dataset we use for this project.
+
+<br />
+
+#### <span style="text-decoration:underline">  Validate the data</span>
+The structure of the dataset is checked.
+```{r}
+str(df)
+```
+The “Order” dataframe is 9994 instances and 22 features. Now check the summary of the “Order” dataframe.
+
+<br />
+
+#### <span style="text-decoration:underline">  Data Summary</span>
+```{r}
+summary(df)
+```
+What piqued interest was the statistics in Sales, Quantity, Discount and Profit column. From there, we know that:
+
+-   Sales range from USD 0.44 to USD 22,638.48 per transaction; the average sales closed is USD 229.86 while a typical sale closed is USD 54.49
+-   Quantity sold range from 1 to 14 items per transaction; typically each transaction sold around 3 to 4 items.
+-   Discount range from USD 0 to USD 0.80, meaning this shop only give minimal discounts to customers.
+-   Profit range from a loss USD -6,599.98 to a profit of USD 8,399.98. The average profit per transaction is USD 28.66 but we know most of the profit is lower than that due to median lower than mean.
+-   On top of that, we also noticed that R is not able to identify which one is datetime format as they are parsed as characters.
+<br />
+<br />
+
+```{r, warning=FALSE, error=FALSE, message=FALSE}
+drop<-c('Row ID','Order ID','Customer ID','Customer Name','Postal Code', 'Product Name','Product ID','Country')
+
+df <- df[,!(names(df) %in% drop)]
+```
+
+#### <span style="text-decoration:underline">  Checking for any missing data</span>
+Next, we check for missing value. The data set is checked for any non-availability (NA). This is because missing value is  dirty and might result in affecting out analysis.
+
+```{r}
+colSums(is.na(df))
+```
+
+There are missing values spotted inside `df`. Based on the results, we can see that there are few variables that contain NA value. They are Ship Mode and Discount. Ship Mode has 33 missing values, while Discount has 42 missing values. These missing value will be handled accordingly. 
+
+<br />
+
+
+
+#### <span style="text-decoration:underline">  Imputation (Using mode & median)</span>
+We know that Ship Mode is in nominal pattern. Hence, we will handle the missing data by using imputation by mode. Meanwhile, for Discount, it is a numerical data. Hence, the missing data will be handled by using imputation by median.
+
+```{r}
+df<-as.data.frame(df)
+
+getmode <- function(v){
+  v=v[nchar(as.character(v))>0]
+  uniqv <- unique(v)
+  uniqv[which.max(tabulate(match(v, uniqv)))]
+}
+
+df[sapply(df, is.character)] <- lapply(df[sapply(df, is.character)], function(x) ifelse(is.na(x) == TRUE, getmode(x), x))
+df[sapply(df, is.character)] <- lapply(df[sapply(df, is.character)], as.factor)
+
+df$Discount[is.na(df$Discount)]<-median(df$Discount,na.rm=TRUE)
+
+
+df$Returned<-df$Returned[is.na(df$Returned)]<-'No'
+
+
+colSums(is.na(df))
+
+```
+From the results, all columns illustrate 0 from any NA value. This show that all missing value had been handled properly. After missing value is cattered, the pattern of the data is studied.
+
+
+<br />
+
+#### <span style="text-decoration:underline">  Check Value Pattern Consistency</span>
+**(Numerical data)** <br />
+Numerical data in the dataset includes Sale, Quantity, Discount, and Profit. The pattern for the numerical data is studied. The aim is to determine for any irrelevant pattern in the dataset. To do so, histogram is plotted.
+
+```{r}
+hist(df$Discount)
+hist(df$Quantity)
+hist(df$Profit)
+hist(df$Sales)
+```
+
+From the histogram, there is weird value in Quantity. This is because quantity should be in a positive whole value. It cannot be negative because this variable indicate the number of product. This is may be due to inputation error. So, removing it would be good since the amount of error in this variable is really small. Our dataset is big, removing small portion of error data will not affecting the whole pattern and orientation of the dataset.<br />
+<br />
+**The rows of the error data are removed:**
+
+```{r}
+df <- df[df$Quantity >= 0, ]
+hist(df$Quantity)
+```
+<br />
+From the results, it shows that the rows containing error value is removed successfully.
+
+<br />
+**(Categorical data)** <br />
+Categorical data in this dataset includes Ship Mode, Segment, Country, City, State, Region, Category, and Sub-Category. The value pattern consistency is determined by counting the frequency distribution for each of the variable. Any weird naming value or redundancy can be determined from this method.
+
+```{r}
+table(df$`Ship Mode`)
+table(df$Segment)
+table(df$Country)
+table(df$City)
+table(df$State)
+table(df$Region)
+table(df$Category)
+table(df$`Sub-Category`)
+
+```
+<br />
+From the results, State have some value redundancy. The case of the letter is not standardized.For example, "Carlifornia" and "CARLIFORNIA" are referring to the same location and redundant.
+
+**Standardizing the case of the letters in State:**
+```{r}
+df$State<-tolower(df$State)
+capFirst <- function(s) {
+  paste(toupper(substring(s, 1, 1)), substring(s, 2), sep = "")
+}
+
+df$State <- capFirst(df$State)
+table(df$State)
+```
+<br />
+From the results, we can see that the data redundancy is catered successfully.
+
+<br />
+
+#### <span style="text-decoration:underline">  Data Transformation</span>
+
+<br />
+```{r}
+df$Segment<-factor(df$Segment)
+df$Segment<-as.numeric(df$Segment)
+df$`Ship Mode`<-factor(df$`Ship Mode`)
+df$`Ship Mode`<-as.numeric(df$`Ship Mode`)
+df$`Sub-Category`<-factor(df$`Sub-Category`)
+df$`Sub-Category`<-as.numeric(df$`Sub-Category`)
+df
+```
+<br />
+
+### 3) Exploratory Data Analysis
+
+In this section, we will drill deeper into the data for more insights. But first, we need to know what problems we want to solve and what questions to ask. Taking the POV of the owner of the Superstore:
+
+-   Overview
+    -   What is the monthly sales and profit since inception?
+-   Overview - Increase Revenue
+    -   Which product category and subcategory has the highest sales, with and without discount?
+    -   Which customer segment that contribute to the highest sales?
+    -   Which region, state and city contribute to the highest sales and profit?
+-   Overview - Reduce Loss
+    -   Which product category and subcategory that has the highest returned item?
+-   Prediction
+    -   Regression: What is the overall sales and profit in the next month?
+    -   Classification: Based on order features, what is the most likely ship mode for that particular order?
+
+<br />
+
+#### <span style="text-decoration:underline">  Overview - Increase Revenue</span>
+
+<br />
+**1. Which product category and subcategory with highest sales, with and without discount?** <br />
+
+```{r}
+df_category_sales <- df %>%
+  select(Category, Sales) %>%
+  group_by(Category) %>%
+  summarise(Sales = sum(Sales))
+```
+
+```{r}
+df_category_sales <- df_category_sales %>%
+  mutate(Percentage = percent(df_category_sales$Sales/sum(df_category_sales$Sales)))
+```
+
+<span style="text-decoration:underline">  Pie Chart for Category by Sales Breakdown</span>
+
+```{r}
+ggplot(df_category_sales, aes(x = "", y = Sales, fill = Category)) +
+  ggtitle("Category by Sales Breakdown") +
+  geom_col() +
+   geom_label(aes(label = Percentage),
+             position = position_stack(vjust = 0.5),
+             show.legend = FALSE) +
+  coord_polar(theta = "y")
+```
+
+<span style="text-decoration:underline">  Bar Chart for Category by Sales Breakdown</span>
+
+```{r}
+bar_category_sales <- ggplot(data=df_category_sales, aes(x=Category, y=Sales, fill=Category)) +
+  coord_cartesian(ylim = c(700000, 850000))+
+  ggtitle("Category by Sales Breakdown") +
+  geom_bar(stat="identity")+
+  geom_text(aes(label=Percentage), vjust=1.6, color="white", size=3.5)+
+  theme_minimal()
+bar_category_sales + scale_fill_manual(values=c("#999999", "#E69F00", "#56B4E9"))
+bar_category_sales
+```
+<br />
+<br />
+**2. Which customer segment that contribute to the highest sales?** 
+
+```{r}
+df_segment_sales <- df %>%
+  select(Segment, Sales) %>%
+  group_by(Segment) %>%
+  summarise(Sales = sum(Sales))
+```
+
+<span style="text-decoration:underline">  Inputting percentage column into the table</span>
+
+```{r}
+df_segment_sales <- df_segment_sales %>%
+  mutate(Percentage = percent(df_segment_sales$Sales/sum(df_category_sales$Sales)))
+```
+
+<span style="text-decoration:underline">  Pie Chart for CUstomer Segment Sales Contribution</span>
+
+```{r}
+ggplot(df_segment_sales, aes(x = "", y = Sales, fill = Segment)) +
+  ggtitle("Customer Segment Sales Contribution") +
+  geom_col() +
+   geom_label(aes(label = Percentage ),
+             position = position_stack(vjust = 0.5),
+             show.legend = FALSE) +
+  coord_polar(theta = "y")
+```
+<br />
+<br />
+**3. Which region, state and city contribute to the highest sales?** 
+
+<span style="text-decoration:underline">  Region - Sales</span>
+
+```{r}
+df_region_sales <- df %>%
+  select(Region, Sales) %>%
+  group_by(Region) %>%
+  summarise(Sales = sum(Sales))
+```
+
+<span style="text-decoration:underline">  Inputting percentage column into the table</span>
+
+```{r}
+df_region_sales <- df_region_sales %>%
+    mutate(Percentage = percent(df_region_sales$Sales/sum(df_region_sales$Sales)))
+```
+
+<span style="text-decoration:underline">  Bar Chart for Region by Sales</span>
+
+```{r}
+bar_region_sales <- ggplot(data=df_region_sales, aes(x=Region, y=Sales, fill=Region)) +
+  coord_cartesian(ylim = c(300000, 800000))+
+  ggtitle("Region by Sales Breakdown") +
+  geom_bar(stat="identity")+
+  geom_text(aes(label=Percentage), vjust=1.6, color="white", size=3.5)+
+  theme_minimal()
+bar_region_sales + scale_fill_manual(values=c("#999999", "#E69F00", "#56B4E9","#f5ad42"))
+bar_region_sales
+```
+
+<span style="text-decoration:underline">  State - Sales</span>
+
+```{r}
+df_state_sales <- df %>%
+  select(State, Sales) %>%
+  group_by(State) %>%
+  summarise(Sales = sum(Sales))
+
+df_state_sales <- df_state_sales[order(-df_state_sales$Sales),]
+```
+
+```{r}
+df_state_sales <- df_state_sales %>%
+  mutate(Percentage = percent(df_state_sales$Sales/sum(df_state_sales$Sales),accuracy = 0.01))
+```
+
+<span style="text-decoration:underline">  Horizontal Bar Chart for Top 10 Regions by Sales</span>
+
+```{r}
+bar_state_sales <- ggplot(data=df_state_sales[1:10,], aes(x=State, y=Sales, fill=State)) +
+  #coord_cartesian(ylim = c(300000, 800000))+
+  geom_bar(stat="identity")+
+  ggtitle("Top 10 Regions by Sales Breakdown") +
+  geom_text(aes(label=Percentage), hjust=1.3, vjust=0.4, color="white", size=3)+
+  theme_minimal()+
+  coord_flip()
+#bar_region_sales + scale_fill_manual(values=c("#999999", "#E69F00", "#56B4E9","#f5ad42"))
+bar_state_sales
+```
+
+<span style="text-decoration:underline">  City - Sales</span>
+
+```{r}
+df_city_sales <- df %>%
+  select(City, Sales) %>%
+  group_by(City) %>%
+  summarise(Sales = sum(Sales))
+
+df_city_sales <- df_city_sales[order(-df_city_sales$Sales),]
+```
+
+```{r}
+df_city_sales <- df_city_sales %>%
+  mutate(Percentage = percent(df_city_sales$Sales/sum(df_city_sales$Sales),accuracy = 0.01))
+```
+
+<span style="text-decoration:underline">  Horizontal Bar Chart for Top 10 City by Sales</span>
+
+```{r}
+bar_city_sales <- ggplot(data=df_city_sales[1:10,], aes(x=City, y=Sales, fill=City)) +
+  geom_bar(stat="identity")+
+  ggtitle("Sales by Category Breakdown") +
+  geom_text(aes(label=Percentage), hjust=1.3, vjust=0.4, color="white", size=3)+
+  theme_minimal()+
+  coord_flip()
+
+bar_city_sales
+```
+
+<br />
+
+#### <span style="text-decoration:underline">  Heat Map Correlation Matrix</span>
+```{r}
+dfnum<-data.frame(df$Profit, df$Discount, df$Quantity, df$`Sub-Category`, df$`Ship Mode`, df$Sales, df$Segment)
+
+corr_mat <- round(cor(dfnum),2)
+melted_corr_mat <- melt(corr_mat)
+print(corr_mat)
+ggplot(data = melted_corr_mat, aes(x=Var1, y=Var2,fill=value)) + geom_tile()
+```
